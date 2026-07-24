@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
-import Compte, { SidePanel, IconUser, useAuthedFetch } from "./components/Compte.jsx";
+import Compte, { SidePanel, IconUser, useAuthedFetch } from "./Compte.jsx";
 
 const SUPABASE_URL = "https://lvvrerrzhtvmgdyzuipc.supabase.co";
 const SUPABASE_KEY =
@@ -108,7 +108,7 @@ async function sbFetch(path, opts = {}) {
   return data;
 }
 
-export default function App() {
+export default function ClientApp() {
   const [categories, setCategories] = useState([]);
   const [products, setProducts] = useState([]);
   const [settings, setSettings] = useState(null);
