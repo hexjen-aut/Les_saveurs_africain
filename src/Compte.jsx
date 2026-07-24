@@ -149,6 +149,10 @@ export default function Compte({ session, setSession, onClose }) {
   const [loading, setLoading] = useState(false);
   const [tab, setTab] = useState("profil");
   const { authFetch, uploadAvatar } = useAuthedFetch(session, setSession);
+  const tabsRef = useRef(null);
+  useEffect(() => {
+    if (tabsRef.current) tabsRef.current.scrollLeft = 0;
+  }, []);
 
   async function submit(e) {
     e.preventDefault();
@@ -229,11 +233,11 @@ export default function Compte({ session, setSession, onClose }) {
   ];
 
   return (
-    <div className="flex-1 overflow-y-auto flex flex-col">
-      <div className="flex gap-1 px-5 pt-4 overflow-x-auto">
+    <div className="flex-1 overflow-y-auto flex flex-col min-w-0">
+      <div ref={tabsRef} className="flex gap-1 px-5 pt-4 pb-1 overflow-x-auto shrink-0">
         {TABS.map((t) => (
           <button key={t.key} onClick={() => setTab(t.key)}
-            className={`px-3 py-1.5 rounded-full text-xs whitespace-nowrap border transition ${tab === t.key ? "bg-[#e8871e] text-[#1b1109] border-[#e8871e]" : "border-[#e8871e]/25 text-[#f3ead9]/60"}`}>
+            className={`shrink-0 px-3 py-1.5 rounded-full text-xs whitespace-nowrap border transition ${tab === t.key ? "bg-[#e8871e] text-[#1b1109] border-[#e8871e]" : "border-[#e8871e]/25 text-[#f3ead9]/60"}`}>
             {t.label}
           </button>
         ))}
