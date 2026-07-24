@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState, useCallback } from "react";
+import React, { useEffect, useMemo, useState, useCallback, useRef } from "react";
 
 const SUPABASE_URL = "https://lvvrerrzhtvmgdyzuipc.supabase.co";
 const ANON_KEY =
@@ -36,24 +36,69 @@ const Icon = {
   LogOut: (p) => <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.4" {...p}><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><path d="M16 17l5-5-5-5M21 12H9"/></svg>,
   Upload: (p) => <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.4" {...p}><path d="M12 16V4M7 9l5-5 5 5"/><path d="M4 16v3a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-3"/></svg>,
   Download: (p) => <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.4" {...p}><path d="M12 4v12M7 11l5 5 5-5"/><path d="M4 20h16"/></svg>,
+  Star: (p) => <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.4" {...p}><path d="m12 3 2.6 5.9 6.4.6-4.8 4.3 1.4 6.3L12 16.9 6.4 20.1l1.4-6.3-4.8-4.3 6.4-.6L12 3Z"/></svg>,
 };
 
+// ---------- Session avec rafraichissement automatique ----------
+// Le token expirait au bout d'1h sans jamais etre renouvele : c'etait la cause du bug
+// "l'upload de photo produit ne marche plus" apres un moment passe sur le dashboard
+// (les appels a l'API Supabase se mettaient a echouer silencieusement avec un token perime).
+function withExpiry(authData) {
+  return { ...authData, obtained_at: Date.now() };
+}
+function isExpiredOrSoon(session) {
+  if (!session) return true;
+  const ttlMs = (session.expires_in || 3600) * 1000;
+  return Date.now() - session.obtained_at > ttlMs - 60000;
+}
+async function refreshSessionToken(session) {
+  if (!session?.refresh_token) return null;
+  const res = await fetch(`${SUPABASE_URL}/auth/v1/token?grant_type=refresh_token`, {
+    method: "POST",
+    headers: { apikey: ANON_KEY, "Content-Type": "application/json" },
+    body: JSON.stringify({ refresh_token: session.refresh_token }),
+  });
+  if (!res.ok) return null;
+  const data = await res.json();
+  return withExpiry(data);
+}
+
 // ---------- API helpers ----------
-function useSupabase(accessToken) {
-  const headers = useMemo(
-    () => ({
-      apikey: ANON_KEY,
-      Authorization: `Bearer ${accessToken || ANON_KEY}`,
-      "Content-Type": "application/json",
-    }),
-    [accessToken]
-  );
+function useSupabase(session, setSession) {
+  const sessionRef = useRef(session);
+  sessionRef.current = session;
+
+  const getToken = useCallback(async () => {
+    let s = sessionRef.current;
+    if (s && isExpiredOrSoon(s)) {
+      const refreshed = await refreshSessionToken(s);
+      if (refreshed) {
+        setSession(refreshed);
+        sessionRef.current = refreshed;
+        s = refreshed;
+      } else {
+        // refresh token invalide/expire -> on force une reconnexion propre plutot
+        // que de laisser des appels echouer en silence
+        setSession(null);
+        return null;
+      }
+    }
+    return s?.access_token || null;
+  }, [setSession]);
 
   const rest = useCallback(
     async (path, opts = {}) => {
+      const token = await getToken();
+      if (!token) throw new Error("Session expiree, merci de te reconnecter.");
       const res = await fetch(`${SUPABASE_URL}/rest/v1/${path}`, {
         ...opts,
-        headers: { ...headers, ...(opts.headers || {}), Prefer: opts.prefer || "return=representation" },
+        headers: {
+          apikey: ANON_KEY,
+          Authorization: `Bearer ${token}`,
+          "Content-Type": "application/json",
+          Prefer: opts.prefer || "return=representation",
+          ...(opts.headers || {}),
+        },
       });
       if (!res.ok) {
         const t = await res.text();
@@ -62,18 +107,21 @@ function useSupabase(accessToken) {
       const text = await res.text();
       return text ? JSON.parse(text) : null;
     },
-    [headers]
+    [getToken]
   );
 
   const uploadFile = useCallback(
     async (file, folder) => {
+      const token = await getToken();
+      if (!token) throw new Error("Session expiree, merci de te reconnecter.");
       const path = `${folder}/${Date.now()}-${file.name.replace(/[^a-zA-Z0-9.\-]/g, "_")}`;
       const res = await fetch(`${SUPABASE_URL}/storage/v1/object/${BUCKET}/${path}`, {
         method: "POST",
         headers: {
           apikey: ANON_KEY,
-          Authorization: `Bearer ${accessToken || ANON_KEY}`,
+          Authorization: `Bearer ${token}`,
           "Content-Type": file.type || "application/octet-stream",
+          "x-upsert": "true",
         },
         body: file,
       });
@@ -83,7 +131,7 @@ function useSupabase(accessToken) {
       }
       return `${SUPABASE_URL}/storage/v1/object/public/${BUCKET}/${path}`;
     },
-    [accessToken]
+    [getToken]
   );
 
   return { rest, uploadFile };
@@ -108,7 +156,7 @@ function LoginScreen({ onLogin }) {
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error_description || data.msg || "Identifiants incorrects");
-      onLogin(data);
+      onLogin(withExpiry(data));
     } catch (err) {
       setError(err.message);
     } finally {
@@ -145,38 +193,45 @@ const NAV = [
   { key: "categories", label: "Categories", icon: Icon.Tag },
   { key: "commandes", label: "Commandes", icon: Icon.Receipt },
   { key: "clients", label: "Clients", icon: Icon.Users },
+  { key: "avis", label: "Avis", icon: Icon.Star },
   { key: "parametres", label: "Parametres", icon: Icon.Settings },
 ];
 
 export default function AdminApp() {
   const [session, setSession] = useState(null);
   const [page, setPage] = useState("dashboard");
-  const { rest, uploadFile } = useSupabase(session?.access_token);
+  const { rest, uploadFile } = useSupabase(session, setSession);
 
   const [categories, setCategories] = useState([]);
   const [products, setProducts] = useState([]);
   const [orders, setOrders] = useState([]);
   const [settings, setSettings] = useState(null);
   const [clients, setClients] = useState([]);
+  const [reviews, setReviews] = useState([]);
   const [loading, setLoading] = useState(false);
+  const [loadError, setLoadError] = useState("");
 
   const loadAll = useCallback(async () => {
     setLoading(true);
+    setLoadError("");
     try {
-      const [cats, prods, ords, sett, profs] = await Promise.all([
+      const [cats, prods, ords, sett, profs, revs] = await Promise.all([
         rest("categories?select=*&order=display_order.asc"),
         rest("products?select=*&order=display_order.asc"),
         rest("orders?select=*,order_items(*)&order=created_at.desc&limit=100"),
         rest("settings?select=*&id=eq.1"),
         rest("profiles?select=*&order=created_at.desc"),
+        rest("reviews?select=*,profiles(full_name),products(name)&order=created_at.desc&limit=100"),
       ]);
       setCategories(cats || []);
       setProducts(prods || []);
       setOrders(ords || []);
       setSettings((sett && sett[0]) || null);
       setClients(profs || []);
+      setReviews(revs || []);
     } catch (e) {
       console.error(e);
+      setLoadError(e.message);
     } finally {
       setLoading(false);
     }
@@ -235,9 +290,17 @@ export default function AdminApp() {
       <main className="flex-1 overflow-y-auto h-screen">
         <div className="px-8 py-6 max-w-6xl">
           {loading && <p className="text-sm text-[#f3ead9]/40 mb-4">Chargement...</p>}
+          {loadError && (
+            <div className="mb-4 text-sm bg-red-500/10 border border-red-500/30 text-red-400 rounded-xl px-4 py-3 flex items-center justify-between">
+              <span>{loadError}</span>
+              {loadError.includes("expiree") && (
+                <button onClick={() => setSession(null)} className="underline shrink-0 ml-3">Se reconnecter</button>
+              )}
+            </div>
+          )}
 
           {page === "dashboard" && (
-            <DashboardPage orders={orders} ordersToday={ordersToday} revenueToday={revenueToday} pendingCount={pendingCount} products={products} clients={clients} />
+            <DashboardPage orders={orders} ordersToday={ordersToday} revenueToday={revenueToday} pendingCount={pendingCount} products={products} clients={clients} reviews={reviews} />
           )}
           {page === "produits" && (
             <ProductsPage products={products} categories={categories} rest={rest} uploadFile={uploadFile} reload={loadAll} />
@@ -245,6 +308,7 @@ export default function AdminApp() {
           {page === "categories" && <CategoriesPage categories={categories} rest={rest} reload={loadAll} />}
           {page === "commandes" && <OrdersPage orders={orders} rest={rest} reload={loadAll} />}
           {page === "clients" && <ClientsPage clients={clients} />}
+          {page === "avis" && <ReviewsPage reviews={reviews} rest={rest} reload={loadAll} />}
           {page === "parametres" && <SettingsPage settings={settings} rest={rest} uploadFile={uploadFile} reload={loadAll} />}
         </div>
       </main>
@@ -262,16 +326,18 @@ function Card({ label, value, accent }) {
   );
 }
 
-function DashboardPage({ orders, ordersToday, revenueToday, pendingCount, products, clients }) {
+function DashboardPage({ orders, ordersToday, revenueToday, pendingCount, products, clients, reviews }) {
+  const avgRating = reviews.length ? (reviews.reduce((s, r) => s + r.rating, 0) / reviews.length).toFixed(1) : "-";
   return (
     <div>
       <h1 className="font-display text-3xl italic mb-6">Tableau de bord</h1>
-      <div className="grid grid-cols-2 sm:grid-cols-5 gap-4 mb-8">
+      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-4 mb-8">
         <Card label="Commandes aujourd'hui" value={ordersToday.length} />
         <Card label="Revenus aujourd'hui" value={formatDh(revenueToday)} accent />
         <Card label="Commandes en attente" value={pendingCount} accent />
         <Card label="Produits actifs" value={products.filter((p) => p.is_available).length} />
         <Card label="Clients inscrits" value={clients.length} />
+        <Card label="Note moyenne" value={avgRating === "-" ? "-" : `${avgRating}/5`} />
       </div>
       <h2 className="font-display text-xl italic mb-3">Dernieres commandes</h2>
       <div className="bg-[#241609] border border-[#e8871e]/15 rounded-2xl overflow-hidden">
@@ -322,6 +388,7 @@ function ImageUploadField({ label, value, onChange, uploadFile, folder }) {
       setError(err.message);
     } finally {
       setUploading(false);
+      e.target.value = "";
     }
   }
 
@@ -544,47 +611,34 @@ function Toggle({ label, checked, onChange }) {
 function CategoriesPage({ categories, rest, reload }) {
   const [name, setName] = useState("");
   const [saving, setSaving] = useState(false);
+  const [error, setError] = useState("");
 
   async function addCategory() {
     if (!name.trim()) return;
     setSaving(true);
-    const slug = name.toLowerCase().trim().replace(/[^a-z0-9]+/g, "-").replace(/(^-|-$)/g, "");
-    await rest("categories", { method: "POST", body: JSON.stringify({ name, slug, display_order: categories.length + 1 }) });
-    setName("");
-    setSaving(false);
-    reload();
+    setError("");
+    try {
+      const slug = name.toLowerCase().trim().replace(/[^a-z0-9]+/g, "-").replace(/(^-|-$)/g, "");
+      await rest("categories", { method: "POST", body: JSON.stringify({ name, slug, display_order: categories.length + 1 }) });
+      setName("");
+      reload();
+    } catch (e) {
+      setError(e.message.includes("duplicate") ? "Une categorie avec un nom similaire existe deja." : e.message);
+    } finally {
+      setSaving(false);
+    }
   }
 
   async function remove(c) {
     if (!confirm(`Supprimer la categorie "${c.name}" ? Les produits associes perdront leur categorie.`)) return;
-    await rest(`categories?id=eq.${c.id}`, { method: "DELETE", prefer: "return=minimal" });
-    reload();
+    setError("");
+    try {
+      await rest(`categories?id=eq.${c.id}`, { method: "DELETE", prefer: "return=minimal" });
+      reload();
+    } catch (e) {
+      setError(e.message);
+    }
   }
-
-  return (
-    <div>
-      <h1 className="font-display text-3xl italic mb-6">Categories</h1>
-      <div className="flex gap-2 mb-6">
-        <input value={name} onChange={(e) => setName(e.target.value)} placeholder="Nom de la nouvelle categorie"
-          className="flex-1 bg-transparent border border-[#e8871e]/30 rounded-full px-4 py-2 text-sm focus:outline-none focus:border-[#e8871e]" />
-        <button onClick={addCategory} disabled={saving} className="flex items-center gap-2 bg-[#e8871e] text-[#1b1109] text-sm font-medium px-4 py-2 rounded-full hover:bg-[#f0983a] transition">
-          <Icon.Plus className="w-4 h-4" /> Ajouter
-        </button>
-      </div>
-      <div className="grid sm:grid-cols-2 gap-3">
-        {categories.map((c) => (
-          <div key={c.id} className="bg-[#241609] border border-[#e8871e]/15 rounded-xl px-4 py-3 flex items-center justify-between">
-            <div>
-              <p className="text-sm">{c.name}</p>
-              <p className="text-xs text-[#f3ead9]/40 font-mono-price">/{c.slug}</p>
-            </div>
-            <button onClick={() => remove(c)} className="p-1.5 hover:text-red-400"><Icon.Trash className="w-4 h-4" /></button>
-          </div>
-        ))}
-      </div>
-    </div>
-  );
-}
 
 // ---------- Commandes ----------
 function OrdersPage({ orders, rest, reload }) {
@@ -610,7 +664,7 @@ function OrdersPage({ orders, rest, reload }) {
           <div key={o.id} className="bg-[#241609] border border-[#e8871e]/15 rounded-2xl p-4">
             <div className="flex items-center justify-between mb-2">
               <div>
-                <p className="text-sm font-medium">Commande {o.order_number}</p>
+                <p className="text-sm font-medium">Commande {o.order_number} <span className="text-[#f3ead9]/40 font-normal">· {o.order_type === "emporter" ? "A emporter" : "Livraison"}</span></p>
                 <p className="text-xs text-[#f3ead9]/40">{new Date(o.created_at).toLocaleString("fr-FR")} · {o.phone || "sans telephone"}</p>
               </div>
               <span className="font-mono-price text-[#e8871e]">{formatDh(o.total)}</span>
@@ -618,6 +672,7 @@ function OrdersPage({ orders, rest, reload }) {
             <div className="text-xs text-[#f3ead9]/60 mb-3">
               {(o.order_items || []).map((it) => `${it.product_name} x${it.quantity}`).join(", ") || "Details indisponibles"}
             </div>
+            {o.notes && <p className="text-xs text-[#f3ead9]/40 mb-3">Note : {o.notes}</p>}
             <div className="flex gap-1.5 overflow-x-auto">
               {STATUS_ORDER.map((s) => (
                 <button key={s} onClick={() => updateStatus(o, s)}
@@ -652,9 +707,9 @@ function ClientsPage({ clients }) {
   });
 
   function exportCsv() {
-    const rows = [["Nom", "Email", "Telephone", "Inscrit le"]];
+    const rows = [["Nom", "Email", "Telephone", "Points fidelite", "Inscrit le"]];
     filtered.forEach((c) => {
-      rows.push([c.full_name || "", c.email || "", c.phone || "", new Date(c.created_at).toLocaleDateString("fr-FR")]);
+      rows.push([c.full_name || "", c.email || "", c.phone || "", c.loyalty_points || 0, new Date(c.created_at).toLocaleDateString("fr-FR")]);
     });
     const csv = rows.map((r) => r.map((v) => `"${String(v).replace(/"/g, '""')}"`).join(",")).join("\n");
     const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
@@ -687,6 +742,7 @@ function ClientsPage({ clients }) {
               <th className="px-4 py-3 font-normal">Nom</th>
               <th className="px-4 py-3 font-normal">Email</th>
               <th className="px-4 py-3 font-normal">Telephone</th>
+              <th className="px-4 py-3 font-normal">Points fidelite</th>
               <th className="px-4 py-3 font-normal">Inscrit le</th>
             </tr>
           </thead>
@@ -696,16 +752,63 @@ function ClientsPage({ clients }) {
                 <td className="px-4 py-3">{c.full_name || "-"}</td>
                 <td className="px-4 py-3 text-[#f3ead9]/70">{c.email || "-"}</td>
                 <td className="px-4 py-3 font-mono-price text-[#e8871e]">{c.phone || "-"}</td>
+                <td className="px-4 py-3">
+                  <span className="text-xs px-2 py-1 rounded-full bg-[#e8871e]/15 text-[#e8871e] font-mono-price">{c.loyalty_points || 0} pts</span>
+                </td>
                 <td className="px-4 py-3 text-[#f3ead9]/50">{new Date(c.created_at).toLocaleDateString("fr-FR")}</td>
               </tr>
             ))}
-            {filtered.length === 0 && <tr><td colSpan={4} className="px-4 py-6 text-center text-[#f3ead9]/40">Aucun client pour le moment.</td></tr>}
+            {filtered.length === 0 && <tr><td colSpan={5} className="px-4 py-6 text-center text-[#f3ead9]/40">Aucun client pour le moment.</td></tr>}
           </tbody>
         </table>
       </div>
       <p className="text-xs text-[#f3ead9]/40 mt-3">
         {filtered.length} client{filtered.length > 1 ? "s" : ""} — utilisable pour tes campagnes WhatsApp / email de fidelisation.
       </p>
+    </div>
+  );
+}
+
+// ---------- Avis clients (moderation) ----------
+function ReviewsPage({ reviews, rest, reload }) {
+  const [busy, setBusy] = useState(false);
+
+  async function remove(r) {
+    if (!confirm("Supprimer cet avis ?")) return;
+    setBusy(true);
+    await rest(`reviews?id=eq.${r.id}`, { method: "DELETE", prefer: "return=minimal" });
+    setBusy(false);
+    reload();
+  }
+
+  const avg = reviews.length ? (reviews.reduce((s, r) => s + r.rating, 0) / reviews.length).toFixed(1) : "-";
+
+  return (
+    <div>
+      <div className="flex items-center justify-between mb-6">
+        <h1 className="font-display text-3xl italic">Avis clients</h1>
+        <div className="text-sm text-[#f3ead9]/60">Note moyenne : <span className="text-[#e8871e] font-mono-price">{avg}/5</span> ({reviews.length} avis)</div>
+      </div>
+      <div className="space-y-3">
+        {reviews.map((r) => (
+          <div key={r.id} className="bg-[#241609] border border-[#e8871e]/15 rounded-2xl p-4">
+            <div className="flex items-start justify-between mb-1">
+              <div>
+                <p className="text-sm font-medium">{r.profiles?.full_name || "Client"}{r.products?.name ? ` · ${r.products.name}` : ""}</p>
+                <div className="flex gap-0.5 mt-1">
+                  {[1, 2, 3, 4, 5].map((n) => (
+                    <Icon.Star key={n} className={`w-3.5 h-3.5 ${n <= r.rating ? "text-[#e8871e] fill-current" : "text-[#f3ead9]/15"}`} />
+                  ))}
+                </div>
+              </div>
+              <button onClick={() => remove(r)} disabled={busy} className="p-1.5 hover:text-red-400"><Icon.Trash className="w-4 h-4" /></button>
+            </div>
+            {r.comment && <p className="text-sm text-[#f3ead9]/70 mt-2">{r.comment}</p>}
+            <p className="text-xs text-[#f3ead9]/30 mt-2">{new Date(r.created_at).toLocaleString("fr-FR")}</p>
+          </div>
+        ))}
+        {reviews.length === 0 && <p className="text-sm text-[#f3ead9]/40">Aucun avis pour le moment.</p>}
+      </div>
     </div>
   );
 }
@@ -720,6 +823,7 @@ function SettingsPage({ settings, rest, uploadFile, reload }) {
     address: settings?.address || "",
     delivery_fee: settings?.delivery_fee || 0,
     min_order_amount: settings?.min_order_amount || 0,
+    points_per_order: settings?.points_per_order ?? 10,
     logo_url: settings?.logo_url || "",
     hero_image_url: settings?.hero_image_url || "",
   });
@@ -736,6 +840,7 @@ function SettingsPage({ settings, rest, uploadFile, reload }) {
         address: settings.address || "",
         delivery_fee: settings.delivery_fee || 0,
         min_order_amount: settings.min_order_amount || 0,
+        points_per_order: settings.points_per_order ?? 10,
         logo_url: settings.logo_url || "",
         hero_image_url: settings.hero_image_url || "",
       });
@@ -744,7 +849,7 @@ function SettingsPage({ settings, rest, uploadFile, reload }) {
 
   async function save() {
     setSaving(true);
-    await rest("settings?id=eq.1", { method: "PATCH", body: JSON.stringify(form) });
+    await rest("settings?id=eq.1", { method: "PATCH", body: JSON.stringify({ ...form, points_per_order: Number(form.points_per_order) }) });
     setSaving(false);
     setSaved(true);
     reload();
@@ -759,15 +864,19 @@ function SettingsPage({ settings, rest, uploadFile, reload }) {
         <ImageUploadField label="Image d'accueil (hero)" value={form.hero_image_url} onChange={(url) => setForm({ ...form, hero_image_url: url })} uploadFile={uploadFile} folder="hero" />
         <Field label="Nom du restaurant"><input className="input2" value={form.restaurant_name} onChange={(e) => setForm({ ...form, restaurant_name: e.target.value })} /></Field>
         <Field label="Telephone"><input className="input2" value={form.phone} onChange={(e) => setForm({ ...form, phone: e.target.value })} /></Field>
-        <Field label="WhatsApp"><input className="input2" value={form.whatsapp} onChange={(e) => setForm({ ...form, whatsapp: e.target.value })} /></Field>
+        <Field label="WhatsApp (support / livraison)"><input className="input2" value={form.whatsapp} onChange={(e) => setForm({ ...form, whatsapp: e.target.value })} /></Field>
         <Field label="TikTok"><input className="input2" value={form.tiktok} onChange={(e) => setForm({ ...form, tiktok: e.target.value })} /></Field>
         <Field label="Adresse"><input className="input2" value={form.address} onChange={(e) => setForm({ ...form, address: e.target.value })} /></Field>
         <Field label="Frais de livraison (dh)"><input type="number" className="input2" value={form.delivery_fee} onChange={(e) => setForm({ ...form, delivery_fee: e.target.value })} /></Field>
         <Field label="Montant minimum de commande (dh)"><input type="number" className="input2" value={form.min_order_amount} onChange={(e) => setForm({ ...form, min_order_amount: e.target.value })} /></Field>
+        <Field label="Points de fidelite par commande terminee"><input type="number" className="input2" value={form.points_per_order} onChange={(e) => setForm({ ...form, points_per_order: e.target.value })} /></Field>
       </div>
       <button onClick={save} disabled={saving} className="mt-5 bg-[#e8871e] text-[#1b1109] font-medium px-6 py-2.5 rounded-full text-sm hover:bg-[#f0983a] transition disabled:opacity-50">
         {saving ? "Enregistrement..." : saved ? "Enregistre ✓" : "Enregistrer"}
       </button>
+      <p className="text-xs text-[#f3ead9]/40 mt-3">
+        Les points sont attribues automatiquement des qu'une commande passe au statut "Terminee" (une commande = ces points, peu importe le nombre de plats a l'interieur).
+      </p>
       <style>{`.input2{width:100%;background:transparent;border:1px solid rgba(232,135,30,.3);border-radius:8px;padding:8px 12px;font-size:14px;color:#f3ead9}.input2:focus{outline:none;border-color:#e8871e}`}</style>
     </div>
   );
