@@ -1,10 +1,9 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
+import Compte, { SidePanel, IconUser, useAuthedFetch } from "./components/Compte.jsx";
 
 const SUPABASE_URL = "https://lvvrerrzhtvmgdyzuipc.supabase.co";
 const SUPABASE_KEY =
   "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imx2dnJlcnJ6aHR2bWdkeXp1aXBjIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODQ1ODExNzAsImV4cCI6MjEwMDE1NzE3MH0.yv6kDwV0oV-0OwGJbzgwgg72OR8oi5SEZrw74gOB4zo";
-
-const WHATSAPP_NUMBER = "212711083188";
 
 // Images libres de droit (Pexels) — utilisees tant que l'admin n'a pas uploade ses propres photos
 const CATEGORY_IMAGES = {
@@ -27,17 +26,11 @@ function formatDh(n) {
   return `${Number(n).toFixed(0)} dh`;
 }
 
-// --- Icones minimalistes (traits fins, style menu) ---
 const IconCart = ({ className }) => (
   <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.4" className={className}>
     <path d="M3 4h2l2.4 12.2a1.6 1.6 0 0 0 1.6 1.3h8.4a1.6 1.6 0 0 0 1.6-1.3L21 8H6.2" strokeLinecap="round" strokeLinejoin="round" />
     <circle cx="10" cy="20.5" r="1" />
     <circle cx="17" cy="20.5" r="1" />
-  </svg>
-);
-const IconClose = ({ className }) => (
-  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.4" className={className}>
-    <path d="M5 5l14 14M19 5L5 19" strokeLinecap="round" />
   </svg>
 );
 const IconPlus = ({ className }) => (
@@ -55,10 +48,9 @@ const IconWhatsapp = ({ className }) => (
     <path d="M12.04 2C6.58 2 2.13 6.45 2.13 11.91c0 1.83.49 3.55 1.35 5.03L2 22l5.2-1.43a9.9 9.9 0 0 0 4.84 1.24h.01c5.46 0 9.9-4.45 9.9-9.91C21.96 6.45 17.5 2 12.04 2Zm0 18.02h-.01a8.1 8.1 0 0 1-4.13-1.13l-.3-.18-3.09.85.83-3-.2-.31a8.07 8.07 0 0 1-1.24-4.34c0-4.47 3.65-8.11 8.15-8.11 4.5 0 8.15 3.64 8.15 8.11 0 4.47-3.66 8.11-8.16 8.11Zm4.47-6.07c-.25-.12-1.44-.71-1.66-.79-.22-.08-.39-.12-.55.12-.16.24-.63.79-.78.95-.14.16-.28.18-.53.06-.25-.12-1.05-.39-2-1.23-.74-.66-1.24-1.47-1.39-1.72-.14-.24-.02-.38.11-.5.11-.11.25-.28.37-.42.12-.14.16-.24.24-.4.08-.16.04-.3-.02-.42-.06-.12-.55-1.33-.76-1.82-.2-.48-.4-.42-.55-.42-.14 0-.31-.02-.47-.02-.16 0-.42.06-.65.3-.22.24-.85.83-.85 2.03 0 1.2.87 2.35.99 2.51.12.16 1.71 2.6 4.14 3.65.58.25 1.03.4 1.38.51.58.18 1.11.16 1.53.1.47-.07 1.44-.59 1.64-1.16.2-.57.2-1.06.14-1.16-.06-.1-.22-.16-.47-.28Z" />
   </svg>
 );
-const IconUser = ({ className }) => (
-  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.4" className={className}>
-    <circle cx="12" cy="8" r="3.2" />
-    <path d="M5 20c0-3.5 3.1-6 7-6s7 2.5 7 6" strokeLinecap="round" />
+const IconStar = ({ className, filled }) => (
+  <svg viewBox="0 0 24 24" fill={filled ? "currentColor" : "none"} stroke="currentColor" strokeWidth="1.4" className={className}>
+    <path d="m12 3 2.6 5.9 6.4.6-4.8 4.3 1.4 6.3L12 16.9 6.4 20.1l1.4-6.3-4.8-4.3 6.4-.6L12 3Z" />
   </svg>
 );
 
@@ -98,13 +90,13 @@ function Reveal({ children, className = "", delay = 0 }) {
   );
 }
 
-// --- API Supabase (REST + Auth) ---
-async function sbFetch(path, opts = {}, token) {
+// --- API Supabase publique (lecture, sans auth) ---
+async function sbFetch(path, opts = {}) {
   const res = await fetch(`${SUPABASE_URL}/rest/v1/${path}`, {
     ...opts,
     headers: {
       apikey: SUPABASE_KEY,
-      Authorization: `Bearer ${token || SUPABASE_KEY}`,
+      Authorization: `Bearer ${SUPABASE_KEY}`,
       "Content-Type": "application/json",
       Prefer: opts.prefer || "return=representation",
       ...(opts.headers || {}),
@@ -116,29 +108,34 @@ async function sbFetch(path, opts = {}, token) {
   return data;
 }
 
-export default function ClientApp() {
+export default function App() {
   const [categories, setCategories] = useState([]);
   const [products, setProducts] = useState([]);
   const [settings, setSettings] = useState(null);
+  const [reviews, setReviews] = useState([]);
   const [loading, setLoading] = useState(true);
   const [activeCat, setActiveCat] = useState(null);
   const [cart, setCart] = useState({});
   const [cartOpen, setCartOpen] = useState(false);
+  const [checkoutOpen, setCheckoutOpen] = useState(false);
   const [query, setQuery] = useState("");
   const [accountOpen, setAccountOpen] = useState(false);
-  const [session, setSession] = useState(null); // { access_token, user }
+  const [session, setSession] = useState(null); // { access_token, refresh_token, expires_in, obtained_at, user }
+  const { authFetch } = useAuthedFetch(session, setSession);
 
   useEffect(() => {
     async function load() {
       try {
-        const [cats, prods, sett] = await Promise.all([
+        const [cats, prods, sett, revs] = await Promise.all([
           sbFetch("categories?select=*&order=display_order.asc"),
           sbFetch("products?select=*&is_available=eq.true&order=display_order.asc"),
           sbFetch("settings?select=*&id=eq.1"),
+          sbFetch("reviews?select=*&order=created_at.desc&limit=12"),
         ]);
         setCategories(cats || []);
         setProducts(prods || []);
         setSettings((sett && sett[0]) || null);
+        setReviews(revs || []);
         if (cats && cats.length) setActiveCat(cats[0].slug);
       } catch (e) {
         console.error("Erreur de chargement", e);
@@ -191,18 +188,9 @@ export default function ClientApp() {
     if (el) el.scrollIntoView({ behavior: "smooth", block: "start" });
   }
 
-  function checkoutOnWhatsapp() {
-    if (cartItems.length === 0) return;
-    let msg = `Bonjour ${settings?.restaurant_name || "Les saveurs africaines"}, je souhaite commander :%0A%0A`;
-    cartItems.forEach((i) => {
-      msg += `- ${i.name} x${i.qty} (${formatDh(i.price * i.qty)})%0A`;
-    });
-    msg += `%0ATotal : ${formatDh(cartTotal)}%0A%0AMerci de me confirmer la disponibilite.`;
-    const phone = settings?.whatsapp?.replace(/\D/g, "") || WHATSAPP_NUMBER;
-    window.open(`https://wa.me/${phone}?text=${msg}`, "_blank");
-  }
-
   const heroImage = settings?.hero_image_url || DEFAULT_HERO_IMAGE;
+  const whatsappSupport = settings?.whatsapp?.replace(/\D/g, "");
+  const avgRating = reviews.length ? (reviews.reduce((s, r) => s + r.rating, 0) / reviews.length).toFixed(1) : null;
 
   return (
     <div className="min-h-screen bg-[#1b1109] text-[#f3ead9]" style={{ fontFamily: "'Work Sans', sans-serif" }}>
@@ -267,6 +255,12 @@ export default function ClientApp() {
               <p className="mt-4 max-w-md text-[#f3ead9]/80 text-sm sm:text-base">
                 Sauces mijotées, grillades braisées et bouillons traditionnels — la cuisine d'Afrique, servie a Casablanca.
               </p>
+              {avgRating && (
+                <div className="mt-3 flex items-center gap-1.5 text-sm text-[#f3ead9]/70">
+                  <IconStar className="w-4 h-4 text-[#e8871e]" filled />
+                  <span>{avgRating}/5 · {reviews.length} avis</span>
+                </div>
+              )}
               <div className="mt-6 flex flex-wrap gap-3">
                 <button
                   onClick={() => scrollToCat(categories[0]?.slug)}
@@ -274,15 +268,6 @@ export default function ClientApp() {
                 >
                   Voir le menu
                 </button>
-                <a
-                  href={`https://wa.me/${settings?.whatsapp?.replace(/\D/g, "") || WHATSAPP_NUMBER}`}
-                  target="_blank"
-                  rel="noreferrer"
-                  className="flex items-center gap-2 border border-[#f3ead9]/30 px-5 py-2.5 rounded-full text-sm hover:bg-[#f3ead9]/10 transition"
-                >
-                  <IconWhatsapp className="w-4 h-4" />
-                  Commander
-                </a>
               </div>
             </Reveal>
           </div>
@@ -348,13 +333,60 @@ export default function ClientApp() {
               </Reveal>
             </section>
           ))}
+
+        {/* AVIS CLIENTS */}
+        {!loading && reviews.length > 0 && (
+          <Reveal>
+            <div className="flex items-baseline gap-4 mb-5">
+              <h2 className="font-display text-3xl italic text-[#f3ead9]">Avis clients</h2>
+              <div className="flex-1 h-px bg-[#e8871e]/25" />
+            </div>
+            <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-4">
+              {reviews.slice(0, 6).map((r) => (
+                <div key={r.id} className="bg-[#241609] border border-[#e8871e]/15 rounded-2xl p-4">
+                  <div className="flex gap-0.5 mb-2">
+                    {[1, 2, 3, 4, 5].map((n) => (
+                      <IconStar key={n} className={`w-3.5 h-3.5 ${n <= r.rating ? "text-[#e8871e]" : "text-[#f3ead9]/15"}`} filled={n <= r.rating} />
+                    ))}
+                  </div>
+                  <p className="text-sm text-[#f3ead9]/80">{r.comment}</p>
+                </div>
+              ))}
+            </div>
+            <p className="text-xs text-[#f3ead9]/40 mt-3">Connecte-toi depuis "Mon compte" pour laisser ton propre avis.</p>
+          </Reveal>
+        )}
       </main>
 
       {/* FOOTER */}
       <footer className="border-t border-[#e8871e]/20 py-8 text-center text-sm text-[#f3ead9]/50">
         <p className="font-display italic text-[#e8871e] text-lg mb-1">Les saveurs africaines</p>
         <p>{settings?.phone || "+212 641 549 471"} · TikTok @{settings?.tiktok || "Les_saveurs_africaines"}</p>
+        {whatsappSupport && (
+          <a
+            href={`https://wa.me/${whatsappSupport}`}
+            target="_blank"
+            rel="noreferrer"
+            className="inline-flex items-center gap-2 mt-3 text-xs border border-[#e8871e]/30 px-4 py-2 rounded-full hover:bg-[#e8871e]/10 transition"
+          >
+            <IconWhatsapp className="w-3.5 h-3.5" />
+            Support / probleme de livraison
+          </a>
+        )}
       </footer>
+
+      {/* Bouton support flottant */}
+      {whatsappSupport && (
+        <a
+          href={`https://wa.me/${whatsappSupport}`}
+          target="_blank"
+          rel="noreferrer"
+          className="fixed bottom-5 right-5 z-30 bg-[#25D366] text-white rounded-full w-12 h-12 flex items-center justify-center shadow-lg hover:scale-105 transition"
+          title="Support WhatsApp"
+        >
+          <IconWhatsapp className="w-6 h-6" />
+        </a>
+      )}
 
       {/* PANIER */}
       {cartOpen && (
@@ -381,142 +413,194 @@ export default function ClientApp() {
               <span className="font-mono-price text-lg text-[#e8871e]">{formatDh(cartTotal)}</span>
             </div>
             <button
-              onClick={checkoutOnWhatsapp}
+              onClick={() => { setCartOpen(false); setCheckoutOpen(true); }}
               disabled={cartItems.length === 0}
               className="w-full flex items-center justify-center gap-2 bg-[#e8871e] disabled:opacity-40 text-[#1b1109] font-medium py-3 rounded-full text-sm hover:bg-[#f0983a] transition"
             >
-              <IconWhatsapp className="w-4 h-4" />
-              Commander sur WhatsApp
+              Passer la commande
             </button>
           </div>
+        </SidePanel>
+      )}
+
+      {/* CHECKOUT */}
+      {checkoutOpen && (
+        <SidePanel onClose={() => setCheckoutOpen(false)} title="Finaliser la commande">
+          <CheckoutPanel
+            session={session}
+            authFetch={authFetch}
+            cartItems={cartItems}
+            cartTotal={cartTotal}
+            settings={settings}
+            onNeedLogin={() => { setCheckoutOpen(false); setAccountOpen(true); }}
+            onSuccess={() => { setCart({}); setCheckoutOpen(false); }}
+          />
         </SidePanel>
       )}
 
       {/* COMPTE */}
       {accountOpen && (
         <SidePanel onClose={() => setAccountOpen(false)} title={session ? "Mon compte" : "Connexion"}>
-          <AccountPanel session={session} setSession={setSession} onClose={() => setAccountOpen(false)} />
+          <Compte session={session} setSession={setSession} onClose={() => setAccountOpen(false)} />
         </SidePanel>
       )}
     </div>
   );
 }
 
-function SidePanel({ onClose, title, children }) {
-  return (
-    <div className="fixed inset-0 z-50 flex justify-end">
-      <div className="absolute inset-0 bg-black/60" onClick={onClose} />
-      <div className="relative w-full max-w-sm h-full bg-[#1b1109] border-l border-[#e8871e]/30 flex flex-col animate-[slideIn_.25s_ease]">
-        <style>{`@keyframes slideIn { from { transform: translateX(100%);} to { transform: translateX(0);} }`}</style>
-        <div className="flex items-center justify-between px-5 py-4 border-b border-[#e8871e]/20">
-          <h3 className="font-display text-xl italic text-[#e8871e]">{title}</h3>
-          <button onClick={onClose}><IconClose className="w-5 h-5 text-[#f3ead9]/70 hover:text-[#f3ead9]" /></button>
-        </div>
-        {children}
-      </div>
-    </div>
-  );
-}
-
-// --- Compte client : inscription / connexion / profil ---
-// Note : la session est gardee en memoire (pas de localStorage) pour rester compatible
-// avec l'apercu artifact. Une fois deploye sur ton propre hebergement, tu peux ajouter
-// une persistance (localStorage/cookie) si tu veux garder la connexion apres un rafraichissement.
-function AccountPanel({ session, setSession, onClose }) {
-  const [mode, setMode] = useState("login"); // login | signup
-  const [form, setForm] = useState({ full_name: "", email: "", phone: "", password: "" });
+// ---------- Checkout reel (ecrit dans orders / order_items) ----------
+function CheckoutPanel({ session, authFetch, cartItems, cartTotal, settings, onNeedLogin, onSuccess }) {
+  const [orderType, setOrderType] = useState("livraison");
+  const [addresses, setAddresses] = useState([]);
+  const [addressId, setAddressId] = useState("");
+  const [phone, setPhone] = useState("");
+  const [notes, setNotes] = useState("");
+  const [loadingAddr, setLoadingAddr] = useState(true);
+  const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
-  const [loading, setLoading] = useState(false);
+  const [success, setSuccess] = useState(null);
 
-  async function submit(e) {
-    e.preventDefault();
-    setLoading(true);
+  useEffect(() => {
+    if (!session) {
+      setLoadingAddr(false);
+      return;
+    }
+    authFetch(`profiles?id=eq.${session.user.id}&select=phone`).then((rows) => {
+      if (rows?.[0]?.phone) setPhone(rows[0].phone);
+    });
+    authFetch(`addresses?user_id=eq.${session.user.id}&select=*&order=created_at.desc`)
+      .then((rows) => {
+        setAddresses(rows || []);
+        if (rows?.[0]) setAddressId(rows[0].id);
+      })
+      .finally(() => setLoadingAddr(false));
+  }, [authFetch, session]);
+
+  const deliveryFee = orderType === "livraison" ? Number(settings?.delivery_fee || 0) : 0;
+  const total = cartTotal + deliveryFee;
+
+  if (!session) {
+    return (
+      <div className="px-5 py-8 text-center">
+        <p className="text-sm text-[#f3ead9]/70 mb-4">Connecte-toi ou cree un compte pour passer commande et suivre sa progression.</p>
+        <button onClick={onNeedLogin} className="bg-[#e8871e] text-[#1b1109] font-medium px-6 py-2.5 rounded-full text-sm hover:bg-[#f0983a] transition">
+          Se connecter
+        </button>
+      </div>
+    );
+  }
+
+  async function submit() {
+    if (orderType === "livraison" && !addressId) {
+      setError("Choisis ou ajoute une adresse de livraison.");
+      return;
+    }
+    if (!phone.trim()) {
+      setError("Merci d'indiquer un numero de telephone.");
+      return;
+    }
+    setSaving(true);
     setError("");
     try {
-      if (mode === "signup") {
-        const res = await fetch(`${SUPABASE_URL}/auth/v1/signup`, {
-          method: "POST",
-          headers: { apikey: SUPABASE_KEY, "Content-Type": "application/json" },
-          body: JSON.stringify({
-            email: form.email,
-            password: form.password,
-            data: { full_name: form.full_name, phone: form.phone },
-          }),
-        });
-        const data = await res.json();
-        if (!res.ok) throw new Error(data.msg || data.error_description || "Inscription impossible");
-        setSession(data);
-      } else {
-        const res = await fetch(`${SUPABASE_URL}/auth/v1/token?grant_type=password`, {
-          method: "POST",
-          headers: { apikey: SUPABASE_KEY, "Content-Type": "application/json" },
-          body: JSON.stringify({ email: form.email, password: form.password }),
-        });
-        const data = await res.json();
-        if (!res.ok) throw new Error(data.error_description || data.msg || "Identifiants incorrects");
-        setSession(data);
-      }
-    } catch (err) {
-      setError(err.message);
+      const orderNumber = `CMD-${Date.now().toString(36).toUpperCase()}`;
+      const order = await authFetch("orders", {
+        method: "POST",
+        body: JSON.stringify({
+          order_number: orderNumber,
+          user_id: session.user.id,
+          status: "en_attente",
+          order_type: orderType,
+          delivery_address_id: orderType === "livraison" ? addressId : null,
+          phone,
+          notes,
+          subtotal: cartTotal,
+          delivery_fee: deliveryFee,
+          total,
+          payment_method: "especes",
+        }),
+      });
+      const orderId = order?.[0]?.id;
+      await authFetch("order_items", {
+        method: "POST",
+        prefer: "return=minimal",
+        body: JSON.stringify(
+          cartItems.map((i) => ({
+            order_id: orderId,
+            product_id: i.id,
+            product_name: i.name,
+            quantity: i.qty,
+            unit_price: i.price,
+            subtotal: i.qty * i.price,
+          }))
+        ),
+      });
+      setSuccess(orderNumber);
+    } catch (e) {
+      setError(e.message);
     } finally {
-      setLoading(false);
+      setSaving(false);
     }
   }
 
-  if (session) {
-    const user = session.user;
+  if (success) {
     return (
-      <div className="px-5 py-5">
-        <p className="text-sm text-[#f3ead9]/70 mb-1">Connecte en tant que</p>
-        <p className="text-lg font-display italic text-[#e8871e] mb-6">
-          {user?.user_metadata?.full_name || user?.email}
-        </p>
-        <div className="space-y-2 text-sm text-[#f3ead9]/70 mb-6">
-          <p>Email : {user?.email}</p>
-          {user?.user_metadata?.phone && <p>Telephone : {user.user_metadata.phone}</p>}
-        </div>
-        <button
-          onClick={() => { setSession(null); onClose(); }}
-          className="w-full border border-[#e8871e]/40 text-sm py-2.5 rounded-full hover:bg-[#e8871e]/10 transition"
-        >
-          Se deconnecter
+      <div className="px-5 py-8 text-center">
+        <p className="font-display italic text-2xl text-[#e8871e] mb-2">Commande envoyee !</p>
+        <p className="text-sm text-[#f3ead9]/70 mb-1">Numero : {success}</p>
+        <p className="text-xs text-[#f3ead9]/50 mb-6">Suis sa progression depuis "Mon compte" → Commandes.</p>
+        <button onClick={onSuccess} className="bg-[#e8871e] text-[#1b1109] font-medium px-6 py-2.5 rounded-full text-sm hover:bg-[#f0983a] transition">
+          Fermer
         </button>
       </div>
     );
   }
 
   return (
-    <form onSubmit={submit} className="px-5 py-5 flex-1 overflow-y-auto">
-      <div className="flex gap-2 mb-5">
-        <button type="button" onClick={() => setMode("login")} className={`flex-1 py-2 rounded-full text-sm border ${mode === "login" ? "bg-[#e8871e] text-[#1b1109] border-[#e8871e]" : "border-[#e8871e]/30 text-[#f3ead9]/70"}`}>Connexion</button>
-        <button type="button" onClick={() => setMode("signup")} className={`flex-1 py-2 rounded-full text-sm border ${mode === "signup" ? "bg-[#e8871e] text-[#1b1109] border-[#e8871e]" : "border-[#e8871e]/30 text-[#f3ead9]/70"}`}>Inscription</button>
+    <div className="flex-1 overflow-y-auto px-5 py-4">
+      <div className="flex gap-2 mb-4">
+        <button onClick={() => setOrderType("livraison")} className={`flex-1 py-2 rounded-full text-sm border ${orderType === "livraison" ? "bg-[#e8871e] text-[#1b1109] border-[#e8871e]" : "border-[#e8871e]/30 text-[#f3ead9]/70"}`}>Livraison</button>
+        <button onClick={() => setOrderType("emporter")} className={`flex-1 py-2 rounded-full text-sm border ${orderType === "emporter" ? "bg-[#e8871e] text-[#1b1109] border-[#e8871e]" : "border-[#e8871e]/30 text-[#f3ead9]/70"}`}>A emporter</button>
       </div>
 
-      {mode === "signup" && (
-        <>
-          <label className="text-xs text-[#f3ead9]/60">Nom complet</label>
-          <input required value={form.full_name} onChange={(e) => setForm({ ...form, full_name: e.target.value })}
-            className="w-full mt-1 mb-3 bg-transparent border border-[#e8871e]/30 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-[#e8871e]" />
-          <label className="text-xs text-[#f3ead9]/60">Telephone</label>
-          <input required value={form.phone} onChange={(e) => setForm({ ...form, phone: e.target.value })} placeholder="+212..."
-            className="w-full mt-1 mb-3 bg-transparent border border-[#e8871e]/30 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-[#e8871e]" />
-        </>
+      {orderType === "livraison" && (
+        <div className="mb-3">
+          <label className="text-xs text-[#f3ead9]/60 block mb-1">Adresse de livraison</label>
+          {loadingAddr ? (
+            <p className="text-xs text-[#f3ead9]/40">Chargement...</p>
+          ) : addresses.length === 0 ? (
+            <p className="text-xs text-[#f3ead9]/40">Aucune adresse enregistree. Ajoute-en une depuis "Mon compte" → Adresses.</p>
+          ) : (
+            <select value={addressId} onChange={(e) => setAddressId(e.target.value)}
+              className="w-full bg-transparent border border-[#e8871e]/30 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-[#e8871e]">
+              {addresses.map((a) => (
+                <option key={a.id} value={a.id}>{a.label || "Adresse"} — {a.address}</option>
+              ))}
+            </select>
+          )}
+        </div>
       )}
-      <label className="text-xs text-[#f3ead9]/60">Email</label>
-      <input required type="email" value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })}
-        className="w-full mt-1 mb-3 bg-transparent border border-[#e8871e]/30 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-[#e8871e]" />
-      <label className="text-xs text-[#f3ead9]/60">Mot de passe</label>
-      <input required type="password" value={form.password} onChange={(e) => setForm({ ...form, password: e.target.value })}
-        className="w-full mt-1 mb-4 bg-transparent border border-[#e8871e]/30 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-[#e8871e]" />
+
+      <label className="text-xs text-[#f3ead9]/60 block mb-1">Telephone</label>
+      <input value={phone} onChange={(e) => setPhone(e.target.value)} placeholder="+212..."
+        className="w-full mb-3 bg-transparent border border-[#e8871e]/30 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-[#e8871e]" />
+
+      <label className="text-xs text-[#f3ead9]/60 block mb-1">Notes (optionnel)</label>
+      <textarea value={notes} onChange={(e) => setNotes(e.target.value)} rows={2}
+        className="w-full mb-4 bg-transparent border border-[#e8871e]/30 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-[#e8871e]" />
+
+      <div className="border-t border-[#e8871e]/15 pt-3 mb-4 text-sm space-y-1">
+        <div className="flex justify-between text-[#f3ead9]/70"><span>Sous-total</span><span className="font-mono-price">{formatDh(cartTotal)}</span></div>
+        {orderType === "livraison" && <div className="flex justify-between text-[#f3ead9]/70"><span>Livraison</span><span className="font-mono-price">{formatDh(deliveryFee)}</span></div>}
+        <div className="flex justify-between text-[#e8871e] font-medium"><span>Total</span><span className="font-mono-price">{formatDh(total)}</span></div>
+      </div>
 
       {error && <p className="text-red-400 text-xs mb-3">{error}</p>}
-      <button disabled={loading} className="w-full bg-[#e8871e] text-[#1b1109] font-medium py-2.5 rounded-full text-sm hover:bg-[#f0983a] transition disabled:opacity-50">
-        {loading ? "Patiente..." : mode === "signup" ? "Creer mon compte" : "Se connecter"}
+
+      <button onClick={submit} disabled={saving} className="w-full bg-[#e8871e] text-[#1b1109] font-medium py-3 rounded-full text-sm hover:bg-[#f0983a] transition disabled:opacity-50">
+        {saving ? "Envoi..." : "Confirmer la commande"}
       </button>
-      <p className="text-xs text-[#f3ead9]/40 mt-4">
-        En creant un compte, tu recevras des offres et actualites de Les saveurs africaines.
-      </p>
-    </form>
+      <p className="text-xs text-[#f3ead9]/40 mt-3 text-center">Paiement a la livraison / au retrait. Un souci ? Utilise le bouton WhatsApp support.</p>
+    </div>
   );
 }
 
